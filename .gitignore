@@ -33,3 +33,6 @@ Thumbs.db
 
 # Backup
 *.bak
+
+# WorkBuddy 工作目录（含本地记忆、缓存等，不应上传）
+.workbuddy/

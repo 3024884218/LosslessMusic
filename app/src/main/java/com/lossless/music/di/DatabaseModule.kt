@@ -65,6 +65,11 @@ object DatabaseModule {
 
     @Provides
     @Singleton
+    fun providePublicMusicExporter(@ApplicationContext context: Context): com.lossless.music.download.PublicMusicExporter =
+        com.lossless.music.download.PublicMusicExporter(context)
+
+    @Provides
+    @Singleton
     fun provideOnlineLyricsFetcher(): com.lossless.music.ui.lyrics.OnlineLyricsFetcher =
         com.lossless.music.ui.lyrics.OnlineLyricsFetcher()
 

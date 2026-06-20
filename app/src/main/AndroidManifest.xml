@@ -19,6 +19,9 @@
     <!-- 旧设备兜底 -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
+    <!-- Android 9 及以下写公共音乐目录需要此权限（B站下载写入 /sdcard/Music/LosslessMusic/） -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
 
     <application
         android:name=".LosslessMusicApp"

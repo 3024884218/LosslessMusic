@@ -184,6 +184,9 @@ class MusicRepository @Inject constructor(
     /**
      * 从本地文件导入(B站下载等场景)。
      * 读取元数据并插入数据库。
+     *
+     * 注意：本方法假设 [file] 已经在 [musicDir] 下（App 私有目录），
+     * filePath 字段会存相对路径。若文件在公共目录，请改用 [importFromPublicFile]。
      */
     suspend fun importFromFile(file: java.io.File, sourceFolder: String = "B站下载"): Song? =
         withContext(Dispatchers.IO) {
@@ -198,6 +201,49 @@ class MusicRepository @Inject constructor(
                     genre = meta.genre,
                     durationMs = meta.durationMs,
                     filePath = file.relativeTo(musicDir).path,
+                    folderPath = sourceFolder,
+                    format = meta.format,
+                    sampleRate = meta.sampleRate,
+                    bitDepth = meta.bitDepth,
+                    bitRate = meta.bitRate,
+                    channels = meta.channels,
+                    fileSize = file.length(),
+                    coverUri = coverPath
+                )
+                val id = songDao.insert(entity)
+                toDomain(entity.copy(id = id))
+            } catch (e: Exception) {
+                null
+            }
+        }
+
+    /**
+     * 从公共音乐目录的文件导入（B站下载到 /sdcard/Music/LosslessMusic/... 后调用）。
+     *
+     * 与 [importFromFile] 的区别：
+     *  - 不复制文件（文件已在公共目录）
+     *  - filePath 存 `EXTERNAL:绝对路径`，PlaybackService 会识别此前缀直接 file:// 播放
+     *  - 删除歌曲时会连同公共目录文件一起删除（见 [deleteSong]）
+     *
+     * @param file 公共目录中的音频文件
+     * @param sourceFolder 用于"文件夹"分类的标签（如 "B站下载"）
+     * @return 导入后的 Song，失败返回 null
+     */
+    suspend fun importFromPublicFile(file: java.io.File, sourceFolder: String = "B站下载"): Song? =
+        withContext(Dispatchers.IO) {
+            try {
+                if (!file.exists()) return@withContext null
+                val meta = metadataReader.readFromFile(file)
+                val coverPath = metadataReader.extractCoverToFile(file, coverDir)
+                val entity = SongEntity(
+                    title = meta.title.ifBlank { file.nameWithoutExtension },
+                    artist = meta.artist,
+                    album = meta.album,
+                    year = meta.year,
+                    genre = meta.genre,
+                    durationMs = meta.durationMs,
+                    // EXTERNAL: 前缀标识"外部公共目录绝对路径"
+                    filePath = "EXTERNAL:${file.absolutePath}",
                     folderPath = sourceFolder,
                     format = meta.format,
                     sampleRate = meta.sampleRate,
@@ -273,8 +319,12 @@ class MusicRepository @Inject constructor(
 
     suspend fun deleteSong(songId: Long) = withContext(Dispatchers.IO) {
         val song = songDao.getSongById(songId) ?: return@withContext
-        // 删除文件
-        val file = File(musicDir, song.filePath)
+        // 删除文件：识别 EXTERNAL: 前缀（公共目录绝对路径）vs 相对路径（私有目录）
+        val file = if (song.filePath.startsWith("EXTERNAL:")) {
+            java.io.File(song.filePath.removePrefix("EXTERNAL:"))
+        } else {
+            java.io.File(musicDir, song.filePath)
+        }
         if (file.exists()) file.delete()
         // 删除封面
         song.coverUri?.let { File(it).delete() }
@@ -392,6 +442,11 @@ class MusicRepository @Inject constructor(
         resumePosition = e.resumePosition
     )
 
-    /** 获取歌曲的完整文件路径(播放时用) */
-    fun getSongFile(song: Song): File = File(musicDir, song.filePath)
+    /** 获取歌曲的完整文件路径(播放时用)。支持 EXTERNAL: 前缀(公共目录绝对路径) */
+    fun getSongFile(song: Song): File =
+        if (song.filePath.startsWith("EXTERNAL:")) {
+            File(song.filePath.removePrefix("EXTERNAL:"))
+        } else {
+            File(musicDir, song.filePath)
+        }
 }

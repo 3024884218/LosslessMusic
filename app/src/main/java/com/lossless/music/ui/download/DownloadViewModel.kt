@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.lossless.music.data.repository.MusicRepository
 import com.lossless.music.download.BiliClient
+import com.lossless.music.download.PublicMusicExporter
 import com.lossless.music.download.VideoInfo
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -22,6 +23,7 @@ import javax.inject.Inject
 class DownloadViewModel @Inject constructor(
     private val biliClient: BiliClient,
     private val repository: MusicRepository,
+    private val publicMusicExporter: PublicMusicExporter,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -155,13 +157,46 @@ class DownloadViewModel @Inject constructor(
         }
     }
 
-    /** 把下载的音频文件导入到音乐库 */
+    /**
+     * 把下载的音频文件导入到公共音乐目录 + 数据库。
+     *
+     * 流程：
+     *  1. 调 PublicMusicExporter 把 filesDir 下的临时 m4a 写到 /sdcard/Music/LosslessMusic/B站下载/
+     *  2. 调 repository.importFromPublicFile() 读元数据 + 入库（filePath 存 EXTERNAL:绝对路径）
+     *  3. 删除 filesDir 下的临时文件
+     *
+     * 失败降级：若写入公共目录失败（权限被拒等），保留原行为——文件留在 filesDir/bili_download/
+     * 并以相对路径入库，至少保证 App 内能播放。
+     */
     private suspend fun importToLibrary(file: File, title: String) {
-        val musicDir = File(context.filesDir, "music/B站下载").apply { mkdirs() }
-        val targetFile = File(musicDir, file.name)
-        file.copyTo(targetFile, overwrite = true)
-        // 通过 Repository 导入到数据库(读取元数据 + 插入记录)
-        repository.importFromFile(targetFile, "B站下载")
+        // 公共目录中的最终文件名（与临时文件同名，避免特殊字符问题已在下载时处理过）
+        val displayName = file.name
+        // m4a 对应 audio/mp4 MIME
+        val mimeType = "audio/mp4"
+
+        // 1. 写入公共音乐目录
+        val publicPath = publicMusicExporter.export(
+            sourceFile = file,
+            displayName = displayName,
+            mimeType = mimeType,
+            subDir = "B站下载"
+        )
+
+        if (publicPath != null) {
+            // 2a. 公共目录写入成功 → 用 EXTERNAL: 前缀入库
+            val publicFile = File(publicPath)
+            repository.importFromPublicFile(publicFile, "B站下载")
+            // 3. 清理临时文件
+            runCatching { file.delete() }
+        } else {
+            // 2b. 降级：公共目录写入失败 → 复制到 App 私有 music/B站下载/ 并以相对路径入库
+            val musicDir = File(context.filesDir, "music/B站下载").apply { mkdirs() }
+            val targetFile = File(musicDir, displayName)
+            file.copyTo(targetFile, overwrite = true)
+            repository.importFromFile(targetFile, "B站下载")
+            // 临时文件清理
+            runCatching { file.delete() }
+        }
     }
 
     private fun updateTask(id: Long, status: DownloadStatusUi, progress: Int = 0, statusText: String) {
